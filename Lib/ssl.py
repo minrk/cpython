@@ -418,6 +418,16 @@ class Purpose(_ASN1Object, _Enum):
     SERVER_AUTH = '1.3.6.1.5.5.7.3.1'
     CLIENT_AUTH = '1.3.6.1.5.5.7.3.2'
 
+    def __format__(self, format_spec):
+        """Produce 'Purpose.SERVER_AUTH'
+
+        instead of '_ASN1Object(...)'
+
+        This would be the default if `_member_type_` were `object`
+        or `__str__` were overridden.
+        """
+        return str(self).__format__(format_spec)
+
 
 class SSLContext(_SSLContext):
     """An SSLContext holds various SSL-related configuration options and

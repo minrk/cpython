@@ -787,6 +787,7 @@ class BasicSocketTests(unittest.TestCase):
         self.assertEqual(ssl.Purpose.SERVER_AUTH.shortname, 'serverAuth')
         self.assertEqual(ssl.Purpose.SERVER_AUTH.oid,
                               '1.3.6.1.5.5.7.3.1')
+        self.assertEqual(f"{ssl.Purpose.SERVER_AUTH}", str(ssl.Purpose.SERVER_AUTH))
 
         val = ssl._ASN1Object('1.3.6.1.5.5.7.3.2')
         self.assertIsInstance(ssl.Purpose.CLIENT_AUTH, ssl._ASN1Object)
@@ -795,6 +796,7 @@ class BasicSocketTests(unittest.TestCase):
         self.assertEqual(ssl.Purpose.CLIENT_AUTH.shortname, 'clientAuth')
         self.assertEqual(ssl.Purpose.CLIENT_AUTH.oid,
                               '1.3.6.1.5.5.7.3.2')
+        self.assertEqual(f"{ssl.Purpose.CLIENT_AUTH}", str(ssl.Purpose.CLIENT_AUTH))
 
     def test_unsupported_dtls(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
