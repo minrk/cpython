@@ -33,6 +33,12 @@ Windows
 
    On Windows, :class:`ProactorEventLoop` is now the default event loop.
 
+.. versionadded:: 3.14
+
+   On Windows, :class:`ProactorEventLoop` now supports
+   :meth:`loop.add_reader` and :meth:`loop.add_writer`
+   by running :meth:`select.select` in a separate Thread.
+
 All event loops on Windows do not support the following methods:
 
 * :meth:`loop.create_unix_connection` and
@@ -42,13 +48,15 @@ All event loops on Windows do not support the following methods:
 * :meth:`loop.add_signal_handler` and
   :meth:`loop.remove_signal_handler` are not supported.
 
+All event loops on Windows have the following limitations:
+
+* :meth:`loop.add_reader` and :meth:`loop.add_writer` only accept
+  socket handles (e.g. pipe file descriptors are not supported).
+
 :class:`SelectorEventLoop` has the following limitations:
 
 * :class:`~selectors.SelectSelector` is used to wait on socket events:
   it supports sockets and is limited to 512 sockets.
-
-* :meth:`loop.add_reader` and :meth:`loop.add_writer` only accept
-  socket handles (e.g. pipe file descriptors are not supported).
 
 * Pipes are not supported, so the :meth:`loop.connect_read_pipe`
   and :meth:`loop.connect_write_pipe` methods are not implemented.
@@ -57,10 +65,6 @@ All event loops on Windows do not support the following methods:
   :meth:`loop.subprocess_exec` and :meth:`loop.subprocess_shell`
   methods are not implemented.
 
-:class:`ProactorEventLoop` has the following limitations:
-
-* The :meth:`loop.add_reader` and :meth:`loop.add_writer`
-  methods are not supported.
 
 The resolution of the monotonic clock on Windows is usually around 15.6
 milliseconds.  The best resolution is 0.5 milliseconds. The resolution depends on the
