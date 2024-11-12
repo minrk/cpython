@@ -970,6 +970,62 @@ class BaseProactorEventLoopTests(test_utils.TestCase):
         tr._protocol.error_received.assert_called_with(err)
         close_transport(tr)
 
+    def test_reader_callback(self):
+        r, w = socket.socketpair()
+        r.setblocking(False)
+        bytes_read = bytearray()
+        _closed = []
+
+        def reader():
+            try:
+                data = r.recv(1024)
+            except BlockingIOError:
+                return
+            if data:
+                bytes_read.extend(data)
+            else:
+                self.assertTrue(self.loop.remove_reader(r.fileno()))
+                r.close()
+                _closed.append(r)
+
+        self.assertIsNone(self.loop._selector_thread)
+        self.loop.add_reader(r.fileno(), reader)
+        self.assertIsNotNone(self.loop._selector_thread)
+        self.loop.call_soon(w.send, b'abc')
+        test_utils.run_until(self.loop, lambda: len(bytes_read) >= 3)
+        self.loop.call_soon(w.send, b'def')
+        test_utils.run_until(self.loop, lambda: len(bytes_read) >= 6)
+        selector_thread = self.loop._selector_thread._thread
+        self.loop.call_soon(w.close)
+        # wait for close
+        test_utils.run_until(self.loop, lambda: r in _closed)
+        self.loop.call_soon(self.loop.stop)
+        self.loop.run_forever()
+        self.loop.close()
+        self.assertEqual(bytes_read, b'abcdef')
+        self.assertFalse(selector_thread.is_alive())
+
+    def test_writer_callback(self):
+        r, w = socket.socketpair()
+        w.setblocking(False)
+
+        def writer(data):
+            w.send(data)
+            self.loop.stop()
+
+        data = b'x' * 1024
+        self.loop.add_writer(w.fileno(), writer, data)
+        self.loop.run_forever()
+
+        self.assertTrue(self.loop.remove_writer(w.fileno()))
+        self.assertFalse(self.loop.remove_writer(w.fileno()))
+        self.loop.close()
+
+        w.close()
+        read = r.recv(len(data) * 2)
+        r.close()
+        self.assertEqual(read, data)
+
 
 @unittest.skipIf(sys.platform != 'win32',
                  'Proactor is supported on Windows only')
@@ -1087,52 +1143,6 @@ class ProactorEventLoopUnixSockSendfileTests(test_utils.TestCase):
         sock = self.make_socket(blocking=True)
         with self.assertRaisesRegex(ValueError, "must be non-blocking"):
             self.run_loop(self.loop.sock_sendfile(sock, self.file))
-
-    def test_reader_callback(self):
-        r, w = socket.socketpair()
-        r.setblocking(False)
-        bytes_read = bytearray()
-
-        def reader():
-            try:
-                data = r.recv(1024)
-            except BlockingIOError:
-                return
-            if data:
-                bytes_read.extend(data)
-            else:
-                self.assertTrue(self.loop.remove_reader(r.fileno()))
-                r.close()
-
-        self.loop.add_reader(r.fileno(), reader)
-        self.loop.call_soon(w.send, b'abc')
-        test_utils.run_until(self.loop, lambda: len(bytes_read) >= 3)
-        self.loop.call_soon(w.send, b'def')
-        test_utils.run_until(self.loop, lambda: len(bytes_read) >= 6)
-        self.loop.call_soon(w.close)
-        self.loop.call_soon(self.loop.stop)
-        self.loop.run_forever()
-        self.assertEqual(bytes_read, b'abcdef')
-
-    def test_writer_callback(self):
-        r, w = socket.socketpair()
-        w.setblocking(False)
-
-        def writer(data):
-            w.send(data)
-            self.loop.stop()
-
-        data = b'x' * 1024
-        self.loop.add_writer(w.fileno(), writer, data)
-        self.loop.run_forever()
-
-        self.assertTrue(self.loop.remove_writer(w.fileno()))
-        self.assertFalse(self.loop.remove_writer(w.fileno()))
-
-        w.close()
-        read = r.recv(len(data) * 2)
-        r.close()
-        self.assertEqual(read, data)
 
 
 if __name__ == '__main__':
