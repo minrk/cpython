@@ -22,6 +22,7 @@ from . import protocols
 from . import sslproto
 from . import transports
 from . import trsock
+from ._selector_thread import _SelectorThreadEventLoop
 from .log import logger
 
 
@@ -624,7 +625,7 @@ class _ProactorSocketTransport(_ProactorReadPipeTransport,
             self._sock.shutdown(socket.SHUT_WR)
 
 
-class BaseProactorEventLoop(base_events.BaseEventLoop):
+class BaseProactorEventLoop(_SelectorThreadEventLoop, base_events.BaseEventLoop):
 
     def __init__(self, proactor):
         super().__init__()
@@ -690,6 +691,7 @@ class BaseProactorEventLoop(base_events.BaseEventLoop):
         # Call these methods before closing the event loop (before calling
         # BaseEventLoop.close), because they can schedule callbacks with
         # call_soon(), which is forbidden when the event loop is closed.
+        _SelectorThreadEventLoop.close(self)
         self._stop_accept_futures()
         self._close_self_pipe()
         self._proactor.close()

@@ -88,16 +88,11 @@ class _SelectorThread:
         self._thread: Optional[threading.Thread] = None
         self._thread_manager_handle = self._thread_manager()
 
-        async def thread_manager_anext() -> None:
-            # the anext builtin wasn't added until 3.10. We just need to iterate
-            # this generator one step.
-            await self._thread_manager_handle.__anext__()
-
         # When the loop starts, start the thread. Not too soon because we can't
         # clean up if we get to this point but the event loop is closed without
         # starting.
         self._real_loop.call_soon(
-            lambda: self._real_loop.create_task(thread_manager_anext())
+            lambda: self._real_loop.create_task(anext(self._thread_manager_handle))
         )
 
         self._readers: Dict[_FileDescriptorLike, Callable] = {}
@@ -133,14 +128,14 @@ class _SelectorThread:
         # can be shut down in this way (non-daemon threads would require the
         # introduction of a new hook: https://bugs.python.org/issue41962)
         self._thread = threading.Thread(
-            name="Tornado selector",
+            name="Selector thread",
             daemon=True,
             target=self._run_select,
         )
         self._thread.start()
         self._start_select()
         try:
-            # The presense of this yield statement means that this coroutine
+            # The presence of this yield statement means that this coroutine
             # is actually an asynchronous generator, which has a special
             # shutdown protocol. We wait at this yield point until the
             # event loop's shutdown_asyncgens method is called, at which point
@@ -286,3 +281,52 @@ class _SelectorThread:
         self._wake_selector()
         return True
 
+
+class _SelectorThreadEventLoop:
+    """
+    Mixin for EventLoops to add add_reader/remove_reader methods run in a SelectorThread
+
+    for implementations (e.g. Proactor) that do not support these methods.
+
+    Instances of this class start a second thread to run a selector.
+
+    The selector thread is not started until the first time it is needed
+    (e.g. the first call to add_reader).
+    """
+    _selector_thread: Optional[_SelectorThread] = None
+
+    def _get_selector_thread(self):
+        """Get the selector, starting it on-demand
+
+        This way, no thread is started if the reader/writer methods are never used
+        """
+        if self._selector_thread is None:
+            self._selector_thread = _SelectorThread(self)
+        return self._selector_thread
+
+    def close(self) -> None:
+        if self._selector_thread is not None:
+            self._selector_thread.close()
+            self._selector_thread = None
+
+    def add_reader(
+        self,
+        fd: "_FileDescriptorLike",
+        callback: Callable[..., None],
+        *args: Any,
+    ) -> None:
+        return self._get_selector_thread().add_reader(fd, callback, *args)
+
+    def add_writer(
+        self,
+        fd: "_FileDescriptorLike",
+        callback: Callable[..., None],
+        *args: Any,
+    ) -> None:
+        return self._get_selector_thread().add_writer(fd, callback, *args)
+
+    def remove_reader(self, fd: "_FileDescriptorLike") -> bool:
+        return self._get_selector_thread().remove_reader(fd)
+
+    def remove_writer(self, fd: "_FileDescriptorLike") -> bool:
+        return self._get_selector_thread().remove_writer(fd)
