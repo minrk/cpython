@@ -699,7 +699,7 @@ class BaseProactorEventLoop(_SelectorThreadEventLoop, base_events.BaseEventLoop)
         self._selector = None
 
         # Close the event loop
-        super().close()
+        base_events.BaseEventLoop.close(self)
 
     async def sock_recv(self, sock, n):
         return await self._proactor.recv(sock, n)
