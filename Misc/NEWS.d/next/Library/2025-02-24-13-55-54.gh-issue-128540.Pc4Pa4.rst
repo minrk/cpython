@@ -1,0 +1,6 @@
+{func}`webbrowser.open` should launch default webbrowsers for URLs that are
+not ``http[s]://`` more often on all platforms (especially ``file://``,
+where the default application by file type was often launched, instead of a
+browser). This works by looking up the default browser using standard APIs
+on macOS and Windows, and adding support for ``gtk-launch`` and ``gio
+launch`` on other platforms.

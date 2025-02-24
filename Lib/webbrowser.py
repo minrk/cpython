@@ -168,6 +168,11 @@ class GenericBrowser(BaseBrowser):
     """Class for all browsers started with a command
        and without remote functionality."""
 
+    # whether it supports file:// URLs
+    # set to False for generic openers like xdg-open,
+    # which do not launch webbrowsers reliably
+    _supports_file = True
+
     def __init__(self, name):
         if isinstance(name, str):
             self.name = name
@@ -180,6 +185,13 @@ class GenericBrowser(BaseBrowser):
 
     def open(self, url, new=0, autoraise=True):
         sys.audit("webbrowser.open", url)
+
+        if not self._supports_file:
+            # skip me for `file://` URLs (e.g. xdg-open)
+            proto, _sep, _rest = url.partition(":")
+            if _sep and proto.lower() == "file":
+                return False
+
         cmdline = [self.name] + [arg.replace("%s", url)
                                  for arg in self.args]
         try:
@@ -415,19 +427,68 @@ class Edge(UnixBrowser):
 # Platform support for Unix
 #
 
+
+def _locate_xdg_desktop(name: str) -> str | None:
+    """Locate .desktop file by name
+
+    Returns absolute path to .desktop file found on $XDG_DATA search path
+    or None if no matching .desktop file is found.
+
+    Needed for `gio launch` support.
+    """
+    if not name.endswith(".desktop"):
+        # ensure it ends in .desktop
+        name += ".desktop"
+    xdg_data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser(
+        "~/.local/share"
+    )
+    xdg_data_dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share/:/usr/share/"
+    all_data_dirs = [xdg_data_home]
+    all_data_dirs.extend(xdg_data_dirs.split(os.pathsep))
+    for data_dir in all_data_dirs:
+        desktop_path = os.path.join(data_dir, "applications", name)
+        if os.path.exists(desktop_path):
+            return desktop_path
+    return None
+
 # These are the right tests because all these Unix browsers require either
 # a console terminal or an X display to run.
 
 def register_X_browsers():
 
+    # use gtk-launch to launch preferred browser by name, if found
+    # this should be _before_ xdg-open, which doesn't necessarily launch a browser
+    if _os_preferred_browser and shutil.which("gtk-launch"):
+        register(
+            "gtk-launch",
+            None,
+            BackgroundBrowser(["gtk-launch", _os_preferred_browser, "%s"]),
+        )
+
     # use xdg-open if around
     if shutil.which("xdg-open"):
-        register("xdg-open", None, BackgroundBrowser("xdg-open"))
+        xdg_open = BackgroundBrowser("xdg-open")
+        # `xdg-open` does NOT guarantee a browser is launched,
+        # so skip it for `file://`
+        xdg_open._supports_file = False
+        register("xdg-open", None, xdg_open)
 
-    # Opens an appropriate browser for the URL scheme according to
+
+    # Opens the default application for the URL scheme according to
     # freedesktop.org settings (GNOME, KDE, XFCE, etc.)
     if shutil.which("gio"):
-        register("gio", None, BackgroundBrowser(["gio", "open", "--", "%s"]))
+        if _os_preferred_browser:
+            absolute_browser = _locate_xdg_desktop(_os_preferred_browser)
+            if absolute_browser:
+                register(
+                    "gio-launch",
+                    None,
+                    BackgroundBrowser(["gio", "launch", absolute_browser, "%s"]),
+                )
+        gio_open = BackgroundBrowser(["gio", "open", "--", "%s"])
+        # `gio open` does NOT guarantee a browser is launched
+        gio_open._supports_file = False
+        register("gio", None, gio_open)
 
     xdg_desktop = os.getenv("XDG_CURRENT_DESKTOP", "").split(":")
 
@@ -442,6 +503,14 @@ def register_X_browsers():
          "KDE_FULL_SESSION" in os.environ) and
             shutil.which("kfmclient")):
         register("kfmclient", Konqueror, Konqueror("kfmclient"))
+
+    # The default XFCE browser
+    if "XFCE" in xdg_desktop and shutil.which("exo-open"):
+        register(
+            "exo-open",
+            None,
+            BackgroundBrowser(["exo-open", "--launch", "WebBrowser", "%s"]),
+        )
 
     # Common symbolic link for the default X11 browser
     if shutil.which("x-www-browser"):
@@ -573,8 +642,58 @@ def register_standard_browsers():
 
 if sys.platform[:3] == "win":
     class WindowsDefault(BaseBrowser):
+        def _open_default_browser(self, url):
+            """Open a URL with the default browser
+
+            launches the web browser no matter what `url` is,
+            unlike startfile.
+
+            Raises OSError if registry lookups fail.
+            Returns False if URL not opened.
+            """
+            try:
+                import winreg
+            except ImportError:
+                return False
+            # lookup progId for https URLs
+            # e.g. 'FirefoxURL-abc123'
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+            ) as key:
+                browser_id = winreg.QueryValueEx(key, "ProgId")[0]
+            # lookup launch command-line
+            # e.g. '"C:\\Program Files\\Mozilla Firefox\\firefox.exe" -osint -url "%1"'
+            with winreg.OpenKey(
+                winreg.HKEY_CLASSES_ROOT,
+                rf"{browser_id}\shell\open\command",
+            ) as key:
+                browser_cmd = winreg.QueryValueEx(key, "")[0]
+            if "%1" not in browser_cmd:
+                # don't know how to build cmd
+                # (is append safe?)
+                return False
+            # this part copied from BackgroundBrowser
+            cmdline = [arg.replace("%1", url) for arg in shlex.split(browser_cmd)]
+            try:
+                p = subprocess.Popen(cmdline)
+                return p.poll() is None
+            except OSError:
+                return False
+
         def open(self, url, new=0, autoraise=True):
             sys.audit("webbrowser.open", url)
+            proto, _sep, _rest = url.partition(":")
+            if _sep and proto.lower() not in {"http", "https"}:
+                # need to lookup browser if it's not a web URL
+                try:
+                    opened = self._open_default_browser(url)
+                except OSError:
+                    # failed to lookup registry items
+                    opened = False
+                if opened:
+                    return opened
+
             try:
                 os.startfile(url)
             except OSError:
@@ -597,7 +716,32 @@ if sys.platform == 'darwin':
             sys.audit("webbrowser.open", url)
             url = url.replace('"', '%22')
             if self.name == 'default':
-                script = f'open location "{url}"'  # opens in default browser
+                proto, _sep, _rest = url.partition(":")
+                if _sep and proto.lower() in {"http", "https"}:
+                    # default web URL, don't need to lookup browser
+                    script = f'open location "{url}"'
+                else:
+                    # if not a web URL, need to lookup default browser to ensure a browser is launched
+                    # this should always work, but is overkill to lookup http handler
+                    # before launching http
+                    script = f"""
+                        use framework "AppKit"
+                        use AppleScript version "2.4"
+                        use scripting additions
+
+                        property NSWorkspace : a reference to current application's NSWorkspace
+                        property NSURL : a reference to current application's NSURL
+
+                        set http_url to NSURL's URLWithString:"https://python.org"
+                        set browser_url to (NSWorkspace's sharedWorkspace)'s ¬
+                            URLForApplicationToOpenURL:http_url
+                        set app_path to browser_url's relativePath as text -- NSURL to absolute path '/Applications/Safari.app'
+
+                        tell application app_path
+                            activate
+                            open location "{url}"
+                        end tell
+                    """
             else:
                 script = f'''
                    tell application "{self.name}"
